@@ -1,0 +1,3 @@
+"""
+Git operations module
+""" 
