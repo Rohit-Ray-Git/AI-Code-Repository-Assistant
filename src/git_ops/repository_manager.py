@@ -2,9 +2,14 @@ import os
 import shutil
 import json
 import datetime
+import subprocess
+import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-import logging
+import threading
+import time
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from git import Repo, GitCommandError
@@ -13,10 +18,118 @@ except ImportError:
     GIT_AVAILABLE = False
     logging.warning("GitPython not available. Git operations will be limited.")
 
+class WorkflowManager:
+    def __init__(self):
+        self.workflow_queue = Queue()
+        self.executor = ThreadPoolExecutor(max_workers=5)
+        self.running_workflows = {}
+        self.workflow_history = []
+        self._start_workflow_processor()
+
+    def _start_workflow_processor(self):
+        """Start the workflow processing thread"""
+        def process_workflows():
+            while True:
+                try:
+                    workflow = self.workflow_queue.get()
+                    if workflow is None:
+                        break
+                    
+                    workflow_id = workflow.get('id')
+                    self.running_workflows[workflow_id] = {
+                        'status': 'running',
+                        'start_time': datetime.datetime.now(),
+                        'workflow': workflow
+                    }
+                    
+                    try:
+                        success = self._execute_workflow(workflow)
+                        if success:
+                            self.running_workflows[workflow_id]['status'] = 'completed'
+                        else:
+                            self.running_workflows[workflow_id]['status'] = 'failed'
+                            self.running_workflows[workflow_id]['error'] = "Workflow execution failed"
+                    except Exception as e:
+                        logging.error(f"Workflow {workflow_id} failed: {str(e)}")
+                        self.running_workflows[workflow_id]['status'] = 'failed'
+                        self.running_workflows[workflow_id]['error'] = str(e)
+                    
+                    self.running_workflows[workflow_id]['end_time'] = datetime.datetime.now()
+                    self.workflow_history.append(self.running_workflows[workflow_id])
+                    
+                except Exception as e:
+                    logging.error(f"Error processing workflow: {str(e)}")
+                finally:
+                    self.workflow_queue.task_done()
+
+        thread = threading.Thread(target=process_workflows, daemon=True)
+        thread.start()
+
+    def _execute_workflow(self, workflow: Dict[str, Any]) -> bool:
+        """Execute a workflow's steps"""
+        try:
+            for step in workflow.get('steps', []):
+                if not self._execute_step(step):
+                    raise Exception(f"Step '{step.get('name', 'unknown')}' failed")
+            return True
+        except Exception as e:
+            logging.error(f"Error executing workflow: {str(e)}")
+            return False
+
+    def _execute_step(self, step: Dict[str, Any]) -> bool:
+        """Execute a single workflow step"""
+        try:
+            command = step.get('command')
+            if not command:
+                return True
+
+            # Execute the command
+            process = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False  # Don't raise exception on non-zero exit
+            )
+            
+            # Log the output
+            if process.stdout:
+                logging.info(f"Command output: {process.stdout}")
+            if process.stderr:
+                logging.warning(f"Command stderr: {process.stderr}")
+            
+            # Return False if command failed
+            if process.returncode != 0:
+                logging.error(f"Command failed with exit code {process.returncode}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error executing step: {str(e)}")
+            return False
+
+    def schedule_workflow(self, workflow: Dict[str, Any]) -> str:
+        """Schedule a workflow for execution"""
+        workflow_id = f"wf_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        workflow['id'] = workflow_id
+        self.workflow_queue.put(workflow)
+        return workflow_id
+
+    def get_workflow_status(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """Get the status of a workflow"""
+        return self.running_workflows.get(workflow_id)
+
+    def get_workflow_history(self) -> List[Dict[str, Any]]:
+        """Get the history of executed workflows"""
+        return self.workflow_history
+
 class RepositoryManager:
     def __init__(self, repo_path: str):
         self.repo_path = Path(repo_path)
         self.repo = None
+        self.workflow_manager = WorkflowManager()
+        
         if os.path.exists(repo_path) and GIT_AVAILABLE:
             try:
                 self.repo = Repo(repo_path)
@@ -409,10 +522,15 @@ class RepositoryManager:
 
     def setup_workflow(self, workflow_name: str, workflow_config: Dict[str, Any]) -> bool:
         """
-        Set up a custom workflow configuration
+        Set up a workflow configuration
+        
+        Args:
+            workflow_name: Name of the workflow
+            workflow_config: Workflow configuration dictionary
+            
+        Returns:
+            bool: True if workflow was set up successfully
         """
-        if not GIT_AVAILABLE or not self.repo:
-            return False
         try:
             workflows_dir = self.repo_path / ".git" / "workflows"
             workflow_file = workflows_dir / f"{workflow_name}.json"
@@ -420,21 +538,64 @@ class RepositoryManager:
             # Create workflows directory if it doesn't exist
             workflows_dir.mkdir(parents=True, exist_ok=True)
             
+            # Validate workflow configuration
+            if not self._validate_workflow_config(workflow_config):
+                raise ValueError("Invalid workflow configuration")
+            
             # Write the workflow configuration
             with open(workflow_file, "w") as f:
                 json.dump(workflow_config, f, indent=2)
             
             return True
+            
         except Exception as e:
-            print(f"Error setting up workflow: {e}")
+            logging.error(f"Failed to set up workflow: {str(e)}")
+            return False
+
+    def _validate_workflow_config(self, config: Dict[str, Any]) -> bool:
+        """Validate workflow configuration"""
+        try:
+            # Check required fields
+            required_fields = ['name', 'description', 'steps']
+            if not all(field in config for field in required_fields):
+                return False
+            
+            # Validate steps
+            if not isinstance(config['steps'], list):
+                return False
+            
+            for step in config['steps']:
+                if not isinstance(step, dict):
+                    return False
+                # Check required step fields
+                if 'name' not in step or 'command' not in step or 'event' not in step:
+                    return False
+                # Validate field types
+                if not isinstance(step['name'], str) or not isinstance(step['command'], str) or not isinstance(step['event'], str):
+                    return False
+                # Validate event is in the workflow events
+                if 'events' in config and step['event'] not in config['events']:
+                    return False
+            
+            # Validate events if present
+            if 'events' in config:
+                if not isinstance(config['events'], list):
+                    return False
+                if not all(isinstance(event, str) for event in config['events']):
+                    return False
+            
+            return True
+            
+        except Exception:
             return False
 
     def get_workflows(self) -> List[Dict[str, Any]]:
         """
         Get list of configured workflows
+        
+        Returns:
+            List[Dict]: List of workflow configurations
         """
-        if not GIT_AVAILABLE or not self.repo:
-            return []
         try:
             workflows_dir = self.repo_path / ".git" / "workflows"
             if not workflows_dir.exists():
@@ -443,65 +604,100 @@ class RepositoryManager:
             workflows = []
             for workflow_file in workflows_dir.glob("*.json"):
                 with open(workflow_file, "r") as f:
-                    import json
                     workflow_config = json.load(f)
                     workflows.append({
                         "name": workflow_file.stem,
                         "config": workflow_config
                     })
             return workflows
+            
         except Exception as e:
-            print(f"Error getting workflows: {e}")
+            logging.error(f"Failed to get workflows: {str(e)}")
             return []
 
     def remove_workflow(self, workflow_name: str) -> bool:
         """
         Remove a workflow configuration
+        
+        Args:
+            workflow_name: Name of the workflow to remove
+            
+        Returns:
+            bool: True if workflow was removed successfully
         """
-        if not GIT_AVAILABLE or not self.repo:
-            return False
         try:
             workflow_file = self.repo_path / ".git" / "workflows" / f"{workflow_name}.json"
             if workflow_file.exists():
                 workflow_file.unlink()
                 return True
             return False
+            
         except Exception as e:
-            print(f"Error removing workflow: {e}")
+            logging.error(f"Failed to remove workflow: {str(e)}")
             return False
 
-    def run_workflow(self, workflow_name: str, event: str, data: Dict[str, Any] = None) -> bool:
+    def run_workflow(self, workflow_name: str, event: str, data: Dict[str, Any] = None) -> str:
         """
         Run a workflow for a specific event
+        
+        Args:
+            workflow_name: Name of the workflow to run
+            event: Event that triggered the workflow
+            data: Additional data for the workflow
+            
+        Returns:
+            str: Workflow execution ID
         """
-        if not GIT_AVAILABLE or not self.repo:
-            return False
         try:
             workflow_file = self.repo_path / ".git" / "workflows" / f"{workflow_name}.json"
             if not workflow_file.exists():
-                return False
+                raise ValueError(f"Workflow {workflow_name} not found")
             
             with open(workflow_file, "r") as f:
-                import json
                 workflow_config = json.load(f)
             
             # Check if the event is configured in the workflow
             if event not in workflow_config.get("events", []):
-                return False
+                raise ValueError(f"Event {event} not configured in workflow {workflow_name}")
             
-            # Execute the workflow steps
-            for step in workflow_config.get("steps", []):
-                if step.get("event") == event:
-                    # Execute the step's command
-                    command = step.get("command")
-                    if command:
-                        import subprocess
-                        subprocess.run(command, shell=True, check=True)
+            # Create workflow execution context
+            workflow = {
+                "name": workflow_name,
+                "event": event,
+                "data": data or {},
+                "steps": [
+                    step for step in workflow_config.get("steps", [])
+                    if step.get("event") == event
+                ]
+            }
             
-            return True
+            # Schedule the workflow
+            return self.workflow_manager.schedule_workflow(workflow)
+            
         except Exception as e:
-            print(f"Error running workflow: {e}")
-            return False
+            logging.error(f"Failed to run workflow: {str(e)}")
+            raise
+
+    def get_workflow_status(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the status of a workflow execution
+        
+        Args:
+            workflow_id: ID of the workflow execution
+            
+        Returns:
+            Optional[Dict]: Workflow status information
+        """
+        return self.workflow_manager.get_workflow_status(workflow_id)
+
+    def get_workflow_history(self) -> List[Dict[str, Any]]:
+        """
+        Get the history of workflow executions
+        
+        Returns:
+            List[Dict]: List of workflow execution records
+        """
+        return self.workflow_manager.get_workflow_history()
 
     def create_backup(self, backup_dir: str) -> bool:
         """

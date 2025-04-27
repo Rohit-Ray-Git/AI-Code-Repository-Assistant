@@ -21,7 +21,23 @@ def test_repo_path(tmp_path):
     # Initialize git repository if available
     if GIT_AVAILABLE:
         from git import Repo
-        Repo.init(repo_path)
+        repo = Repo.init(repo_path)
+        
+        # Configure user for commits
+        with repo.config_writer() as config:
+            config.set_value("user", "name", "Test User")
+            config.set_value("user", "email", "test@example.com")
+        
+        # Create initial commit to establish HEAD and main branch
+        readme_path = repo_path / "README.md"
+        readme_path.write_text("# Test Repository\nThis is a test repository.")
+        repo.index.add(["README.md"])
+        repo.index.commit("Initial commit")
+        
+        # Ensure we're on main branch
+        if "main" not in repo.heads:
+            main = repo.create_head("main")
+            repo.head.reference = main
     
     return str(repo_path)
 
@@ -214,42 +230,235 @@ exit 0
             hooks = repo_manager.get_hooks()
             assert hook_name not in hooks
 
-def test_workflow_management(repo_manager):
-    # Test setting up a workflow
-    workflow_name = "test-workflow"
-    workflow_config = {
+def test_workflow_setup_and_validation(repo_manager):
+    # Test valid workflow configuration
+    valid_workflow = {
+        "name": "test-workflow",
+        "description": "Test workflow",
         "events": ["push", "pull_request"],
         "steps": [
             {
+                "name": "test-step",
                 "event": "push",
-                "command": "echo 'Running push workflow'"
-            },
-            {
-                "event": "pull_request",
-                "command": "echo 'Running PR workflow'"
+                "command": "echo 'Test step'"
             }
         ]
     }
     
-    success = repo_manager.setup_workflow(workflow_name, workflow_config)
-    if success:
-        # Verify the workflow was created
-        workflows = repo_manager.get_workflows()
-        assert len(workflows) > 0
-        workflow = next((w for w in workflows if w["name"] == workflow_name), None)
-        assert workflow is not None
-        assert workflow["config"] == workflow_config
-        
-        # Test running the workflow
-        run_success = repo_manager.run_workflow(workflow_name, "push")
-        assert run_success
-        
-        # Test removing the workflow
-        remove_success = repo_manager.remove_workflow(workflow_name)
-        if remove_success:
-            workflows = repo_manager.get_workflows()
-            workflow = next((w for w in workflows if w["name"] == workflow_name), None)
-            assert workflow is None
+    # Test setup with valid configuration
+    assert repo_manager.setup_workflow("test-workflow", valid_workflow) == True
+    
+    # Test invalid configurations
+    invalid_configs = [
+        # Missing required field
+        {
+            "name": "test-workflow",
+            "steps": []
+        },
+        # Invalid steps format
+        {
+            "name": "test-workflow",
+            "description": "Test workflow",
+            "steps": "not-a-list"
+        },
+        # Missing required step fields
+        {
+            "name": "test-workflow",
+            "description": "Test workflow",
+            "steps": [{"name": "test-step"}]
+        },
+        # Invalid step field types
+        {
+            "name": "test-workflow",
+            "description": "Test workflow",
+            "steps": [{
+                "name": 123,
+                "event": "push",
+                "command": "echo 'Test'"
+            }]
+        },
+        # Invalid event in step
+        {
+            "name": "test-workflow",
+            "description": "Test workflow",
+            "events": ["push"],
+            "steps": [{
+                "name": "test-step",
+                "event": "invalid-event",
+                "command": "echo 'Test'"
+            }]
+        }
+    ]
+    
+    for config in invalid_configs:
+        assert repo_manager.setup_workflow("test-invalid-workflow", config) == False
+
+def test_workflow_management(repo_manager):
+    """Test workflow management operations"""
+    # Create a test workflow
+    workflow = {
+        "name": "test-workflow",
+        "description": "A test workflow",
+        "events": ["push", "pull_request"],
+        "steps": [
+            {
+                "name": "test-step",
+                "event": "push",
+                "command": "echo 'Test step'"
+            }
+        ]
+    }
+    
+    # Test workflow setup
+    assert repo_manager.setup_workflow("test-workflow", workflow)
+    
+    # Test getting workflows
+    workflows = repo_manager.get_workflows()
+    assert len(workflows) == 1
+    assert workflows[0]["name"] == "test-workflow"
+    assert workflows[0]["config"] == workflow
+    
+    # Test workflow removal
+    assert repo_manager.remove_workflow("test-workflow")
+    workflows = repo_manager.get_workflows()
+    assert len(workflows) == 0
+
+def test_workflow_execution(repo_manager):
+    """Test workflow execution and monitoring"""
+    # Create a test workflow
+    workflow = {
+        "name": "test-workflow",
+        "description": "A test workflow",
+        "events": ["push", "pull_request"],
+        "steps": [
+            {
+                "name": "test-step",
+                "event": "push",
+                "command": "echo 'Test step'"
+            }
+        ]
+    }
+    
+    # Set up the workflow
+    assert repo_manager.setup_workflow("test-workflow", workflow)
+    
+    # Run the workflow
+    workflow_id = repo_manager.run_workflow("test-workflow", "push")
+    assert workflow_id is not None
+    
+    # Wait for workflow completion
+    max_wait = 5  # seconds
+    start_time = time.time()
+    while time.time() - start_time < max_wait:
+        status = repo_manager.get_workflow_status(workflow_id)
+        if status and status["status"] in ["completed", "failed"]:
+            break
+        time.sleep(0.1)
+    
+    # Verify workflow status
+    status = repo_manager.get_workflow_status(workflow_id)
+    assert status is not None
+    assert status["status"] == "completed"
+    assert "start_time" in status
+    assert "end_time" in status
+    
+    # Verify workflow history
+    history = repo_manager.get_workflow_history()
+    assert len(history) > 0
+    assert any(w["workflow"]["id"] == workflow_id for w in history)
+
+def test_workflow_error_handling(repo_manager):
+    """Test workflow error handling"""
+    # Create a workflow with a failing command
+    workflow = {
+        "name": "error-workflow",
+        "description": "A workflow with errors",
+        "events": ["push"],
+        "steps": [
+            {
+                "name": "failing-step",
+                "event": "push",
+                "command": "exit 1"  # This will fail
+            }
+        ]
+    }
+    
+    # Set up the workflow
+    assert repo_manager.setup_workflow("error-workflow", workflow)
+    
+    # Run the workflow
+    workflow_id = repo_manager.run_workflow("error-workflow", "push")
+    assert workflow_id is not None
+    
+    # Wait for workflow completion
+    max_wait = 5  # seconds
+    start_time = time.time()
+    while time.time() - start_time < max_wait:
+        status = repo_manager.get_workflow_status(workflow_id)
+        if status and status["status"] in ["completed", "failed"]:
+            break
+        time.sleep(0.1)
+    
+    # Verify workflow failed
+    status = repo_manager.get_workflow_status(workflow_id)
+    assert status is not None
+    assert status["status"] == "failed"
+    assert "error" in status
+
+def test_workflow_concurrent_execution(repo_manager):
+    """Test concurrent workflow execution"""
+    # Create multiple workflows
+    workflows = []
+    for i in range(3):
+        workflow = {
+            "name": f"concurrent-workflow-{i}",
+            "description": f"Concurrent workflow {i}",
+            "events": ["push"],
+            "steps": [
+                {
+                    "name": f"step-{i}",
+                    "event": "push",
+                    "command": f"echo 'Concurrent step {i}'"
+                }
+            ]
+        }
+        workflows.append(workflow)
+    
+    # Set up all workflows
+    for workflow in workflows:
+        assert repo_manager.setup_workflow(workflow["name"], workflow)
+    
+    # Run all workflows concurrently
+    workflow_ids = []
+    for workflow in workflows:
+        workflow_id = repo_manager.run_workflow(workflow["name"], "push")
+        workflow_ids.append(workflow_id)
+    
+    # Wait for all workflows to complete
+    max_wait = 10  # seconds
+    start_time = time.time()
+    while time.time() - start_time < max_wait:
+        all_completed = True
+        for workflow_id in workflow_ids:
+            status = repo_manager.get_workflow_status(workflow_id)
+            if not status or status["status"] not in ["completed", "failed"]:
+                all_completed = False
+                break
+        if all_completed:
+            break
+        time.sleep(0.1)
+    
+    # Verify all workflows completed
+    for workflow_id in workflow_ids:
+        status = repo_manager.get_workflow_status(workflow_id)
+        assert status is not None
+        assert status["status"] == "completed"
+    
+    # Verify workflow history
+    history = repo_manager.get_workflow_history()
+    assert len(history) >= len(workflow_ids)
+    for workflow_id in workflow_ids:
+        assert any(w["workflow"]["id"] == workflow_id for w in history)
 
 def test_backup_and_restore(repo_manager, tmp_path):
     # Create a backup
