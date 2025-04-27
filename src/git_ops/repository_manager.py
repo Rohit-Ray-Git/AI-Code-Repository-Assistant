@@ -1,4 +1,5 @@
 import os
+import shutil
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
@@ -345,4 +346,156 @@ class RepositoryManager:
             return templates
         except Exception as e:
             print(f"Error listing templates: {e}")
-            return [] 
+            return []
+
+    def setup_hook(self, hook_name: str, script_content: str) -> bool:
+        """
+        Set up a Git hook with the provided script content
+        """
+        if not GIT_AVAILABLE or not self.repo:
+            return False
+        try:
+            hooks_dir = self.repo_path / ".git" / "hooks"
+            hook_file = hooks_dir / hook_name
+            
+            # Create hooks directory if it doesn't exist
+            hooks_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Write the hook script
+            with open(hook_file, "w") as f:
+                f.write(script_content)
+            
+            # Make the hook executable
+            os.chmod(hook_file, 0o755)
+            return True
+        except Exception as e:
+            print(f"Error setting up hook: {e}")
+            return False
+
+    def get_hooks(self) -> List[str]:
+        """
+        Get list of installed Git hooks
+        """
+        if not GIT_AVAILABLE or not self.repo:
+            return []
+        try:
+            hooks_dir = self.repo_path / ".git" / "hooks"
+            if not hooks_dir.exists():
+                return []
+            return [f.name for f in hooks_dir.iterdir() if f.is_file() and not f.name.endswith(".sample")]
+        except Exception as e:
+            print(f"Error getting hooks: {e}")
+            return []
+
+    def remove_hook(self, hook_name: str) -> bool:
+        """
+        Remove a Git hook
+        """
+        if not GIT_AVAILABLE or not self.repo:
+            return False
+        try:
+            hook_file = self.repo_path / ".git" / "hooks" / hook_name
+            if hook_file.exists():
+                hook_file.unlink()
+                return True
+            return False
+        except Exception as e:
+            print(f"Error removing hook: {e}")
+            return False
+
+    def setup_workflow(self, workflow_name: str, workflow_config: Dict[str, Any]) -> bool:
+        """
+        Set up a custom workflow configuration
+        """
+        if not GIT_AVAILABLE or not self.repo:
+            return False
+        try:
+            workflows_dir = self.repo_path / ".git" / "workflows"
+            workflow_file = workflows_dir / f"{workflow_name}.json"
+            
+            # Create workflows directory if it doesn't exist
+            workflows_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Write the workflow configuration
+            import json
+            with open(workflow_file, "w") as f:
+                json.dump(workflow_config, f, indent=2)
+            
+            return True
+        except Exception as e:
+            print(f"Error setting up workflow: {e}")
+            return False
+
+    def get_workflows(self) -> List[Dict[str, Any]]:
+        """
+        Get list of configured workflows
+        """
+        if not GIT_AVAILABLE or not self.repo:
+            return []
+        try:
+            workflows_dir = self.repo_path / ".git" / "workflows"
+            if not workflows_dir.exists():
+                return []
+            
+            workflows = []
+            for workflow_file in workflows_dir.glob("*.json"):
+                with open(workflow_file, "r") as f:
+                    import json
+                    workflow_config = json.load(f)
+                    workflows.append({
+                        "name": workflow_file.stem,
+                        "config": workflow_config
+                    })
+            return workflows
+        except Exception as e:
+            print(f"Error getting workflows: {e}")
+            return []
+
+    def remove_workflow(self, workflow_name: str) -> bool:
+        """
+        Remove a workflow configuration
+        """
+        if not GIT_AVAILABLE or not self.repo:
+            return False
+        try:
+            workflow_file = self.repo_path / ".git" / "workflows" / f"{workflow_name}.json"
+            if workflow_file.exists():
+                workflow_file.unlink()
+                return True
+            return False
+        except Exception as e:
+            print(f"Error removing workflow: {e}")
+            return False
+
+    def run_workflow(self, workflow_name: str, event: str, data: Dict[str, Any] = None) -> bool:
+        """
+        Run a workflow for a specific event
+        """
+        if not GIT_AVAILABLE or not self.repo:
+            return False
+        try:
+            workflow_file = self.repo_path / ".git" / "workflows" / f"{workflow_name}.json"
+            if not workflow_file.exists():
+                return False
+            
+            with open(workflow_file, "r") as f:
+                import json
+                workflow_config = json.load(f)
+            
+            # Check if the event is configured in the workflow
+            if event not in workflow_config.get("events", []):
+                return False
+            
+            # Execute the workflow steps
+            for step in workflow_config.get("steps", []):
+                if step.get("event") == event:
+                    # Execute the step's command
+                    command = step.get("command")
+                    if command:
+                        import subprocess
+                        subprocess.run(command, shell=True, check=True)
+            
+            return True
+        except Exception as e:
+            print(f"Error running workflow: {e}")
+            return False 

@@ -409,4 +409,111 @@ def register_routes(app):
             templates = repo_manager.list_templates()
             return jsonify({"templates": templates})
         except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/hooks/setup", methods=["POST"])
+    def setup_hook():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            hook_name = data.get("hook_name")
+            script_content = data.get("script_content")
+            if not repo_path or not hook_name or not script_content:
+                return jsonify({"error": "Repository path, hook name, and script content are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.setup_hook(hook_name, script_content)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/hooks", methods=["POST"])
+    def get_hooks():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            if not repo_path:
+                return jsonify({"error": "Repository path is required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            hooks = repo_manager.get_hooks()
+            return jsonify({"hooks": hooks})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/hooks/remove", methods=["POST"])
+    def remove_hook():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            hook_name = data.get("hook_name")
+            if not repo_path or not hook_name:
+                return jsonify({"error": "Repository path and hook name are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.remove_hook(hook_name)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/workflows/setup", methods=["POST"])
+    def setup_workflow():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            workflow_name = data.get("workflow_name")
+            workflow_config = data.get("workflow_config")
+            if not repo_path or not workflow_name or not workflow_config:
+                return jsonify({"error": "Repository path, workflow name, and configuration are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.setup_workflow(workflow_name, workflow_config)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/workflows", methods=["POST"])
+    def get_workflows():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            if not repo_path:
+                return jsonify({"error": "Repository path is required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            workflows = repo_manager.get_workflows()
+            return jsonify({"workflows": workflows})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/workflows/remove", methods=["POST"])
+    def remove_workflow():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            workflow_name = data.get("workflow_name")
+            if not repo_path or not workflow_name:
+                return jsonify({"error": "Repository path and workflow name are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.remove_workflow(workflow_name)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/workflows/run", methods=["POST"])
+    def run_workflow():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            workflow_name = data.get("workflow_name")
+            event = data.get("event")
+            workflow_data = data.get("data", {})
+            if not repo_path or not workflow_name or not event:
+                return jsonify({"error": "Repository path, workflow name, and event are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.run_workflow(workflow_name, event, workflow_data)
+            return jsonify({"success": success})
+        except Exception as e:
             return jsonify({"error": str(e)}), 500 

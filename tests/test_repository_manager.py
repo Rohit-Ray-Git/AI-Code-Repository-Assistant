@@ -168,4 +168,60 @@ def test_create_and_list_templates(repo_manager):
         assert len(templates) > 0
         template = next((t for t in templates if t["name"] == template_name), None)
         assert template is not None
-        assert template["description"] == description 
+        assert template["description"] == description
+
+def test_hook_management(repo_manager):
+    # Test setting up a hook
+    hook_name = "pre-commit"
+    script_content = """#!/bin/sh
+echo "Running pre-commit hook"
+exit 0
+"""
+    success = repo_manager.setup_hook(hook_name, script_content)
+    if success:
+        # Verify the hook was created
+        hooks = repo_manager.get_hooks()
+        assert hook_name in hooks
+        
+        # Test removing the hook
+        remove_success = repo_manager.remove_hook(hook_name)
+        if remove_success:
+            hooks = repo_manager.get_hooks()
+            assert hook_name not in hooks
+
+def test_workflow_management(repo_manager):
+    # Test setting up a workflow
+    workflow_name = "test-workflow"
+    workflow_config = {
+        "events": ["push", "pull_request"],
+        "steps": [
+            {
+                "event": "push",
+                "command": "echo 'Running push workflow'"
+            },
+            {
+                "event": "pull_request",
+                "command": "echo 'Running PR workflow'"
+            }
+        ]
+    }
+    
+    success = repo_manager.setup_workflow(workflow_name, workflow_config)
+    if success:
+        # Verify the workflow was created
+        workflows = repo_manager.get_workflows()
+        assert len(workflows) > 0
+        workflow = next((w for w in workflows if w["name"] == workflow_name), None)
+        assert workflow is not None
+        assert workflow["config"] == workflow_config
+        
+        # Test running the workflow
+        run_success = repo_manager.run_workflow(workflow_name, "push")
+        assert run_success
+        
+        # Test removing the workflow
+        remove_success = repo_manager.remove_workflow(workflow_name)
+        if remove_success:
+            workflows = repo_manager.get_workflows()
+            workflow = next((w for w in workflows if w["name"] == workflow_name), None)
+            assert workflow is None 
