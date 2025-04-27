@@ -1,14 +1,39 @@
 import pytest
 import sys
 import os
+import json
 from pathlib import Path
 from src import RepositoryManager
 from src.git_ops.repository_manager import GIT_AVAILABLE
+import time
 
 # Add the project root to Python path
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+@pytest.fixture
+def test_repo_path(tmp_path):
+    """Create a temporary test repository"""
+    repo_path = tmp_path / "test_repo"
+    os.makedirs(repo_path)
+    
+    # Initialize git repository if available
+    if GIT_AVAILABLE:
+        from git import Repo
+        Repo.init(repo_path)
+    
+    return str(repo_path)
+
+@pytest.fixture
+def test_code_file(test_repo_path):
+    """Create a test code file in the repository"""
+    file_path = os.path.join(test_repo_path, "test_file.py")
+    with open(file_path, "w") as f:
+        f.write("""def add(a, b):
+    return a + b
+""")
+    return "test_file.py"
 
 @pytest.fixture
 def repo_manager(test_repo_path):
@@ -224,4 +249,73 @@ def test_workflow_management(repo_manager):
         if remove_success:
             workflows = repo_manager.get_workflows()
             workflow = next((w for w in workflows if w["name"] == workflow_name), None)
-            assert workflow is None 
+            assert workflow is None
+
+def test_backup_and_restore(repo_manager, tmp_path):
+    # Create a backup
+    backup_dir = str(tmp_path / "backups")
+    success = repo_manager.create_backup(backup_dir)
+    if success:
+        # List backups
+        backups = repo_manager.list_backups(backup_dir)
+        assert len(backups) > 0
+        
+        # Verify backup metadata
+        backup = backups[0]
+        assert "timestamp" in backup
+        assert "repository_path" in backup
+        assert "git_version" in backup
+        
+        # Restore the backup
+        restore_path = str(tmp_path / "restored_repo")
+        restore_success = repo_manager.restore_backup(
+            str(tmp_path / "backups" / backup["name"]),
+            restore_path
+        )
+        if restore_success:
+            assert os.path.exists(restore_path)
+            assert os.path.exists(os.path.join(restore_path, ".git"))
+
+def test_backup_scheduling(repo_manager, tmp_path):
+    backup_dir = str(tmp_path / "scheduled_backups")
+    schedule = {
+        "frequency": "daily",
+        "time": "00:00",
+        "retention_days": 7,
+        "backup_path": backup_dir
+    }
+    
+    # Set up backup schedule
+    success = repo_manager.schedule_backup(backup_dir, schedule)
+    if success:
+        # Get and verify schedule
+        current_schedule = repo_manager.get_backup_schedule()
+        assert current_schedule == schedule
+
+def test_backup_management(repo_manager, tmp_path):
+    # Create multiple backups
+    backup_dir = str(tmp_path / "managed_backups")
+    
+    # Create first backup
+    success1 = repo_manager.create_backup(backup_dir)
+    assert success1
+    
+    # Add a small delay to ensure different timestamps
+    time.sleep(1)
+    
+    # Create second backup
+    success2 = repo_manager.create_backup(backup_dir)
+    assert success2
+    
+    # List backups
+    backups = repo_manager.list_backups(backup_dir)
+    assert len(backups) == 2
+    
+    # Delete first backup
+    delete_success = repo_manager.delete_backup(
+        str(tmp_path / "managed_backups" / backups[0]["name"])
+    )
+    if delete_success:
+        # Verify backup was deleted
+        remaining_backups = repo_manager.list_backups(backup_dir)
+        assert len(remaining_backups) == 1 

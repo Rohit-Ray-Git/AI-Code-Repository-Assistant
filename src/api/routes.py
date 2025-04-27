@@ -516,4 +516,93 @@ def register_routes(app):
             success = repo_manager.run_workflow(workflow_name, event, workflow_data)
             return jsonify({"success": success})
         except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/backup/create", methods=["POST"])
+    def create_backup():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            backup_path = data.get("backup_path")
+            include_config = data.get("include_config", True)
+            if not repo_path or not backup_path:
+                return jsonify({"error": "Repository path and backup path are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.create_backup(backup_path, include_config)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/backup/restore", methods=["POST"])
+    def restore_backup():
+        try:
+            data = request.get_json()
+            backup_path = data.get("backup_path")
+            target_path = data.get("target_path")
+            if not backup_path:
+                return jsonify({"error": "Backup path is required"}), 400
+            
+            repo_manager = RepositoryManager(backup_path)
+            success = repo_manager.restore_backup(backup_path, target_path)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/backup/list", methods=["POST"])
+    def list_backups():
+        try:
+            data = request.get_json()
+            backup_dir = data.get("backup_dir")
+            if not backup_dir:
+                return jsonify({"error": "Backup directory is required"}), 400
+            
+            repo_manager = RepositoryManager(backup_dir)
+            backups = repo_manager.list_backups(backup_dir)
+            return jsonify({"backups": backups})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/backup/delete", methods=["POST"])
+    def delete_backup():
+        try:
+            data = request.get_json()
+            backup_path = data.get("backup_path")
+            if not backup_path:
+                return jsonify({"error": "Backup path is required"}), 400
+            
+            repo_manager = RepositoryManager(backup_path)
+            success = repo_manager.delete_backup(backup_path)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/backup/schedule", methods=["POST"])
+    def schedule_backup():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            backup_path = data.get("backup_path")
+            schedule = data.get("schedule", {})
+            if not repo_path or not backup_path:
+                return jsonify({"error": "Repository path and backup path are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.schedule_backup(backup_path, schedule)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/backup/schedule/get", methods=["POST"])
+    def get_backup_schedule():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            if not repo_path:
+                return jsonify({"error": "Repository path is required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            schedule = repo_manager.get_backup_schedule()
+            return jsonify({"schedule": schedule})
+        except Exception as e:
             return jsonify({"error": str(e)}), 500 

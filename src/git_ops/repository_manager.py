@@ -1,25 +1,29 @@
 import os
 import shutil
+import json
+import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+import logging
 
 try:
-    from gitpython import Repo, Git
+    from git import Repo, GitCommandError
     GIT_AVAILABLE = True
 except ImportError:
     GIT_AVAILABLE = False
-    print("Warning: gitpython not available. Git operations will be limited.")
+    logging.warning("GitPython not available. Git operations will be limited.")
 
 class RepositoryManager:
     def __init__(self, repo_path: str):
         self.repo_path = Path(repo_path)
-        if GIT_AVAILABLE:
+        self.repo = None
+        if os.path.exists(repo_path) and GIT_AVAILABLE:
             try:
                 self.repo = Repo(repo_path)
-            except:
-                self.repo = None
-        else:
-            self.repo = None
+            except Exception as e:
+                logging.error(f"Failed to initialize repository: {str(e)}")
+        elif not GIT_AVAILABLE:
+            logging.warning("GitPython not available. Git operations will be limited.")
 
     def get_branches(self) -> List[str]:
         """
@@ -417,7 +421,6 @@ class RepositoryManager:
             workflows_dir.mkdir(parents=True, exist_ok=True)
             
             # Write the workflow configuration
-            import json
             with open(workflow_file, "w") as f:
                 json.dump(workflow_config, f, indent=2)
             
@@ -498,4 +501,196 @@ class RepositoryManager:
             return True
         except Exception as e:
             print(f"Error running workflow: {e}")
-            return False 
+            return False
+
+    def create_backup(self, backup_dir: str) -> bool:
+        """
+        Create a backup of the repository
+        
+        Args:
+            backup_dir: Directory where backups will be stored
+            
+        Returns:
+            bool: True if backup was successful, False otherwise
+        """
+        try:
+            # Create backup directory if it doesn't exist
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            # Generate backup name with timestamp
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_name = f"backup_{timestamp}"
+            backup_path = os.path.join(backup_dir, backup_name)
+            
+            # Create backup using copytree with ignore_patterns
+            shutil.copytree(
+                str(self.repo_path),  # Convert Path to string
+                backup_path,
+                symlinks=True,
+                ignore=None  # Copy all files including .git
+            )
+            
+            # Create metadata file
+            metadata = {
+                "timestamp": timestamp,
+                "repository_path": str(self.repo_path),
+                "git_version": self.repo.git.version() if self.repo and GIT_AVAILABLE else "N/A",
+                "name": backup_name
+            }
+            
+            metadata_path = os.path.join(backup_dir, f"{backup_name}_metadata.json")
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to create backup: {str(e)}")
+            return False
+    
+    def restore_backup(self, backup_path: str, restore_path: str) -> bool:
+        """
+        Restore a repository from backup
+        
+        Args:
+            backup_path: Path to the backup
+            restore_path: Path where repository should be restored
+            
+        Returns:
+            bool: True if restore was successful, False otherwise
+        """
+        try:
+            # Check if backup exists
+            if not os.path.exists(backup_path):
+                raise ValueError("Backup path does not exist")
+            
+            # Create restore directory if it doesn't exist
+            os.makedirs(restore_path, exist_ok=True)
+            
+            # Remove existing contents if any
+            if os.path.exists(restore_path):
+                for item in os.listdir(restore_path):
+                    item_path = os.path.join(restore_path, item)
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                    else:
+                        os.remove(item_path)
+            
+            # Restore repository with all contents including .git
+            shutil.copytree(
+                backup_path,
+                restore_path,
+                dirs_exist_ok=True,
+                symlinks=True,
+                ignore=None
+            )
+            
+            # Initialize Git repository if GitPython is available
+            if GIT_AVAILABLE and os.path.exists(os.path.join(restore_path, ".git")):
+                try:
+                    Repo(restore_path)
+                except Exception as e:
+                    logging.warning(f"Failed to initialize Git repository after restore: {str(e)}")
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to restore backup: {str(e)}")
+            return False
+    
+    def list_backups(self, backup_dir: str) -> List[Dict]:
+        """
+        List all backups in the backup directory
+        
+        Args:
+            backup_dir: Directory containing backups
+            
+        Returns:
+            List[Dict]: List of backup metadata
+        """
+        try:
+            backups = []
+            
+            # List all metadata files
+            for file in os.listdir(backup_dir):
+                if file.endswith("_metadata.json"):
+                    with open(os.path.join(backup_dir, file), 'r') as f:
+                        metadata = json.load(f)
+                        backups.append(metadata)
+            
+            return sorted(backups, key=lambda x: x["timestamp"], reverse=True)
+            
+        except Exception as e:
+            logging.error(f"Failed to list backups: {str(e)}")
+            return []
+    
+    def delete_backup(self, backup_path: str) -> bool:
+        """
+        Delete a backup
+        
+        Args:
+            backup_path: Path to the backup to delete
+            
+        Returns:
+            bool: True if deletion was successful, False otherwise
+        """
+        try:
+            # Delete backup directory
+            if os.path.exists(backup_path):
+                shutil.rmtree(backup_path)
+            
+            # Delete metadata file
+            metadata_path = f"{backup_path}_metadata.json"
+            if os.path.exists(metadata_path):
+                os.remove(metadata_path)
+            
+            # Verify deletion
+            if os.path.exists(backup_path) or os.path.exists(metadata_path):
+                raise Exception("Failed to delete backup files")
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to delete backup: {str(e)}")
+            return False
+    
+    def schedule_backup(self, backup_dir: str, schedule: Dict) -> bool:
+        """
+        Schedule automatic backups
+        
+        Args:
+            backup_dir: Directory where backups will be stored
+            schedule: Dictionary containing schedule configuration
+            
+        Returns:
+            bool: True if schedule was set successfully, False otherwise
+        """
+        try:
+            # Save schedule configuration
+            schedule_path = os.path.join(backup_dir, "backup_schedule.json")
+            with open(schedule_path, 'w') as f:
+                json.dump(schedule, f)
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to set backup schedule: {str(e)}")
+            return False
+    
+    def get_backup_schedule(self) -> Optional[Dict]:
+        """
+        Get current backup schedule
+        
+        Returns:
+            Optional[Dict]: Current backup schedule or None if not set
+        """
+        try:
+            schedule_path = os.path.join(self.repo_path, "backup_schedule.json")
+            if os.path.exists(schedule_path):
+                with open(schedule_path, 'r') as f:
+                    return json.load(f)
+            return None
+            
+        except Exception as e:
+            logging.error(f"Failed to get backup schedule: {str(e)}")
+            return None 
