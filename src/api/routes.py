@@ -321,4 +321,92 @@ def register_routes(app):
             conflicts = repo_manager.get_merge_conflicts()
             return jsonify({"conflicts": conflicts})
         except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/init", methods=["POST"])
+    def initialize_repository():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            bare = data.get("bare", False)
+            if not repo_path:
+                return jsonify({"error": "Repository path is required"}), 400
+            
+            success = RepositoryManager.initialize_repository(repo_path, bare)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/clone", methods=["POST"])
+    def clone_repository():
+        try:
+            data = request.get_json()
+            url = data.get("url")
+            target_path = data.get("target_path")
+            branch = data.get("branch")
+            if not url or not target_path:
+                return jsonify({"error": "Repository URL and target path are required"}), 400
+            
+            success = RepositoryManager.clone_repository(url, target_path, branch)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/configure", methods=["POST"])
+    def configure_repository():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            config = data.get("config", {})
+            if not repo_path:
+                return jsonify({"error": "Repository path is required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.configure_repository(config)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/config", methods=["POST"])
+    def get_repository_config():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            if not repo_path:
+                return jsonify({"error": "Repository path is required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            config = repo_manager.get_repository_config()
+            return jsonify({"config": config})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/template/create", methods=["POST"])
+    def create_template():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            template_name = data.get("template_name")
+            description = data.get("description", "")
+            if not repo_path or not template_name:
+                return jsonify({"error": "Repository path and template name are required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            success = repo_manager.create_template(template_name, description)
+            return jsonify({"success": success})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/v1/repository/templates", methods=["POST"])
+    def list_templates():
+        try:
+            data = request.get_json()
+            repo_path = data.get("path")
+            if not repo_path:
+                return jsonify({"error": "Repository path is required"}), 400
+            
+            repo_manager = RepositoryManager(repo_path)
+            templates = repo_manager.list_templates()
+            return jsonify({"templates": templates})
+        except Exception as e:
             return jsonify({"error": str(e)}), 500 

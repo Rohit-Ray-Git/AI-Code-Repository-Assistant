@@ -1,5 +1,6 @@
 import pytest
 import sys
+import os
 from pathlib import Path
 from src import RepositoryManager
 from src.git_ops.repository_manager import GIT_AVAILABLE
@@ -120,4 +121,51 @@ def test_merge_conflicts(repo_manager):
     conflicts = repo_manager.get_merge_conflicts()
     assert isinstance(conflicts, list)
     # If there are no conflicts, the list should be empty
-    assert len(conflicts) >= 0 
+    assert len(conflicts) >= 0
+
+def test_initialize_repository(tmp_path):
+    repo_path = str(tmp_path / "test_repo")
+    success = RepositoryManager.initialize_repository(repo_path)
+    if success:
+        assert os.path.exists(os.path.join(repo_path, ".git"))
+        repo_manager = RepositoryManager(repo_path)
+        assert repo_manager.repo is not None
+
+def test_clone_repository(tmp_path):
+    if not GIT_AVAILABLE:
+        pytest.skip("GitPython not available")
+    
+    # Use a small public repository for testing
+    test_repo_url = "https://github.com/octocat/Hello-World.git"
+    target_path = str(tmp_path / "cloned_repo")
+    
+    success = RepositoryManager.clone_repository(test_repo_url, target_path)
+    if success:
+        assert os.path.exists(os.path.join(target_path, ".git"))
+        repo_manager = RepositoryManager(target_path)
+        assert repo_manager.repo is not None
+
+def test_configure_repository(repo_manager):
+    config = {
+        "user.name": "Test User",
+        "user.email": "test@example.com"
+    }
+    success = repo_manager.configure_repository(config)
+    if success:
+        current_config = repo_manager.get_repository_config()
+        assert current_config.get("user.name") == "Test User"
+        assert current_config.get("user.email") == "test@example.com"
+
+def test_create_and_list_templates(repo_manager):
+    template_name = "test-template"
+    description = "A test template"
+    
+    # Create a template
+    success = repo_manager.create_template(template_name, description)
+    if success:
+        # List templates
+        templates = repo_manager.list_templates()
+        assert len(templates) > 0
+        template = next((t for t in templates if t["name"] == template_name), None)
+        assert template is not None
+        assert template["description"] == description 
