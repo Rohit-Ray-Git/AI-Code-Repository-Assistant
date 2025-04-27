@@ -521,15 +521,41 @@ class RepositoryManager:
             return False
 
     def setup_workflow(self, workflow_name: str, workflow_config: Dict[str, Any]) -> bool:
-        """
-        Set up a workflow configuration
+        """Set up a workflow configuration.
         
         Args:
-            workflow_name: Name of the workflow
-            workflow_config: Workflow configuration dictionary
+            workflow_name: Name of the workflow. Will be used as the filename (with .json extension)
+            workflow_config: Dictionary containing the workflow configuration with the following structure:
+                {
+                    "name": str,           # Name of the workflow
+                    "description": str,     # Description of what the workflow does
+                    "events": List[str],    # Optional list of events that can trigger this workflow
+                    "steps": List[Dict],    # List of steps to execute, each containing:
+                        {
+                            "name": str,    # Name of the step
+                            "event": str,   # Event that triggers this step
+                            "command": str  # Command to execute
+                        }
+                }
             
         Returns:
-            bool: True if workflow was set up successfully
+            bool: True if workflow was set up successfully, False otherwise
+            
+        Example:
+            >>> workflow = {
+            ...     "name": "test-workflow",
+            ...     "description": "Run tests on push",
+            ...     "events": ["push", "pull_request"],
+            ...     "steps": [
+            ...         {
+            ...             "name": "run-tests",
+            ...             "event": "push",
+            ...             "command": "pytest tests/"
+            ...         }
+            ...     ]
+            ... }
+            >>> repo_manager.setup_workflow("test-workflow", workflow)
+            True
         """
         try:
             workflows_dir = self.repo_path / ".git" / "workflows"
@@ -540,53 +566,77 @@ class RepositoryManager:
             
             # Validate workflow configuration
             if not self._validate_workflow_config(workflow_config):
-                raise ValueError("Invalid workflow configuration")
+                logging.error(f"Invalid workflow configuration for {workflow_name}")
+                return False
             
             # Write the workflow configuration
             with open(workflow_file, "w") as f:
                 json.dump(workflow_config, f, indent=2)
             
+            logging.info(f"Successfully set up workflow: {workflow_name}")
             return True
             
         except Exception as e:
-            logging.error(f"Failed to set up workflow: {str(e)}")
+            logging.error(f"Failed to set up workflow {workflow_name}: {str(e)}")
             return False
 
     def _validate_workflow_config(self, config: Dict[str, Any]) -> bool:
-        """Validate workflow configuration"""
+        """Validate workflow configuration structure and content.
+        
+        Args:
+            config: Dictionary containing the workflow configuration
+            
+        Returns:
+            bool: True if configuration is valid, False otherwise
+            
+        Validation rules:
+            1. Must have required fields: name, description, steps
+            2. Steps must be a list of dictionaries
+            3. Each step must have: name (str), command (str), event (str)
+            4. If events are specified, step events must be in the workflow events list
+        """
         try:
             # Check required fields
             required_fields = ['name', 'description', 'steps']
             if not all(field in config for field in required_fields):
+                logging.error("Missing required fields in workflow configuration")
                 return False
             
             # Validate steps
             if not isinstance(config['steps'], list):
+                logging.error("Steps must be a list")
                 return False
             
             for step in config['steps']:
                 if not isinstance(step, dict):
+                    logging.error("Each step must be a dictionary")
                     return False
                 # Check required step fields
                 if 'name' not in step or 'command' not in step or 'event' not in step:
+                    logging.error("Step missing required fields (name, command, event)")
                     return False
                 # Validate field types
                 if not isinstance(step['name'], str) or not isinstance(step['command'], str) or not isinstance(step['event'], str):
+                    logging.error("Step fields must be strings")
                     return False
                 # Validate event is in the workflow events
                 if 'events' in config and step['event'] not in config['events']:
+                    logging.error(f"Step event '{step['event']}' not in workflow events: {config['events']}")
                     return False
             
             # Validate events if present
             if 'events' in config:
                 if not isinstance(config['events'], list):
+                    logging.error("Events must be a list")
                     return False
                 if not all(isinstance(event, str) for event in config['events']):
+                    logging.error("All events must be strings")
                     return False
             
             return True
             
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error validating workflow configuration: {str(e)}")
             return False
 
     def get_workflows(self) -> List[Dict[str, Any]]:
@@ -700,14 +750,22 @@ class RepositoryManager:
         return self.workflow_manager.get_workflow_history()
 
     def create_backup(self, backup_dir: str) -> bool:
-        """
-        Create a backup of the repository
+        """Create a backup of the repository including all files and Git data.
         
         Args:
-            backup_dir: Directory where backups will be stored
+            backup_dir: Directory where backups will be stored. Will be created if it doesn't exist.
             
         Returns:
             bool: True if backup was successful, False otherwise
+            
+        The backup includes:
+            - All repository files
+            - .git directory (configuration, history, etc.)
+            - Metadata file with backup information
+            
+        Example:
+            >>> repo_manager.create_backup("/path/to/backups")
+            True
         """
         try:
             # Create backup directory if it doesn't exist
@@ -720,7 +778,7 @@ class RepositoryManager:
             
             # Create backup using copytree with ignore_patterns
             shutil.copytree(
-                str(self.repo_path),  # Convert Path to string
+                str(self.repo_path),
                 backup_path,
                 symlinks=True,
                 ignore=None  # Copy all files including .git
@@ -738,26 +796,38 @@ class RepositoryManager:
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
             
+            logging.info(f"Successfully created backup: {backup_name}")
             return True
             
         except Exception as e:
             logging.error(f"Failed to create backup: {str(e)}")
             return False
-    
+
     def restore_backup(self, backup_path: str, restore_path: str) -> bool:
-        """
-        Restore a repository from backup
+        """Restore a repository from a backup.
         
         Args:
-            backup_path: Path to the backup
-            restore_path: Path where repository should be restored
+            backup_path: Path to the backup directory
+            restore_path: Path where the repository should be restored
             
         Returns:
             bool: True if restore was successful, False otherwise
+            
+        The restore process:
+            1. Validates backup exists
+            2. Creates restore directory if needed
+            3. Cleans existing content in restore path
+            4. Copies all backup content including .git
+            5. Reinitializes Git repository if GitPython is available
+            
+        Example:
+            >>> repo_manager.restore_backup("/path/to/backup_20240101_120000", "/path/to/restore")
+            True
         """
         try:
             # Check if backup exists
             if not os.path.exists(backup_path):
+                logging.error("Backup path does not exist")
                 raise ValueError("Backup path does not exist")
             
             # Create restore directory if it doesn't exist
@@ -785,15 +855,17 @@ class RepositoryManager:
             if GIT_AVAILABLE and os.path.exists(os.path.join(restore_path, ".git")):
                 try:
                     Repo(restore_path)
+                    logging.info("Successfully reinitialized Git repository")
                 except Exception as e:
                     logging.warning(f"Failed to initialize Git repository after restore: {str(e)}")
             
+            logging.info(f"Successfully restored backup to: {restore_path}")
             return True
             
         except Exception as e:
             logging.error(f"Failed to restore backup: {str(e)}")
             return False
-    
+
     def list_backups(self, backup_dir: str) -> List[Dict]:
         """
         List all backups in the backup directory
