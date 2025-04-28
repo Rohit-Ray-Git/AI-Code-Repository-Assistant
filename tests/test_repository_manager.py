@@ -527,4 +527,55 @@ def test_backup_management(repo_manager, tmp_path):
     if delete_success:
         # Verify backup was deleted
         remaining_backups = repo_manager.list_backups(backup_dir)
-        assert len(remaining_backups) == 1 
+        assert len(remaining_backups) == 1
+
+def test_backup_metadata_handling(tmp_path):
+    """Test that backup metadata is properly created, read, and managed"""
+    # Setup test repository
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    repo = RepositoryManager.initialize_repository(str(repo_path))
+    manager = RepositoryManager(str(repo_path))
+    
+    # Create backup directory
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    
+    # Create a backup with specific exclude patterns
+    exclude_patterns = ["*.pyc", "__pycache__/*"]
+    assert manager.create_backup(str(backup_dir), exclude_patterns=exclude_patterns)
+    
+    # List backups and verify metadata
+    backups = manager.list_backups(str(backup_dir))
+    assert len(backups) == 1
+    metadata = backups[0]
+    
+    # Verify metadata contents
+    assert "timestamp" in metadata
+    assert "repository_path" in metadata
+    assert metadata["repository_path"] == str(repo_path)
+    assert "git_version" in metadata
+    assert "name" in metadata
+    assert metadata["name"].startswith("backup_")
+    
+    # Verify exclude patterns include both default and user-specified patterns
+    all_patterns = manager.get_default_exclude_patterns() + exclude_patterns
+    assert set(metadata["exclude_patterns"]) == set(all_patterns)
+    
+    # Verify included files list
+    assert "included_files" in metadata
+    assert isinstance(metadata["included_files"], list)
+    
+    # Create another backup and verify list is ordered
+    time.sleep(1)  # Ensure different timestamp
+    assert manager.create_backup(str(backup_dir))
+    backups = manager.list_backups(str(backup_dir))
+    assert len(backups) == 2
+    assert backups[0]["timestamp"] > backups[1]["timestamp"]  # Most recent first
+    
+    # Delete first backup and verify metadata is also deleted
+    first_backup_path = os.path.join(str(backup_dir), backups[1]["name"])
+    assert manager.delete_backup(first_backup_path)
+    remaining_backups = manager.list_backups(str(backup_dir))
+    assert len(remaining_backups) == 1
+    assert remaining_backups[0]["name"] == backups[0]["name"] 

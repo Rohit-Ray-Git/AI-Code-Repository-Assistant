@@ -1,159 +1,40 @@
 # AI Code Repository Assistant
 
-An intelligent AI-powered coding assistant that integrates with code repositories to automate code reviews, streamline repository management, and support debugging.
+## Overview
+The AI Code Repository Assistant is a tool designed to help manage code repositories, perform git operations, and handle workflow management. It provides a comprehensive set of features to streamline the development process.
 
 ## Features
-
-- 🤖 AI-powered code review automation
-- 📦 Repository management automation
-- 🔍 Intelligent debugging support
-- 🔄 Seamless integration with GitHub and GitLab
-- 📝 Documentation generation and management
-
-## Tech Stack
-
-- Python 3.9+
-- Google Gemini AI
-- FastAPI for API endpoints
-- SQLite for local storage
-- GitPython for repository operations
-- Pydantic for data validation
-
-## Project Structure
-
-```
-ai-code-repo-assistant/
-├── src/
-│   ├── core/           # Core functionality
-│   ├── ai/             # AI integration
-│   ├── git/            # Git operations
-│   ├── api/            # API endpoints
-│   └── utils/          # Utility functions
-├── tests/              # Test files
-├── docs/               # Documentation
-└── config/             # Configuration files
-```
-
-## Setup
-
-1. Clone the repository
-2. Create a virtual environment
-3. Install dependencies
-4. Set up environment variables
-5. Run the application
-
-## Development Status
-
-🚧 Under Development
-
-## License
-
-MIT License 
-
-# Git Repository Manager
-
-A Python library for managing Git repositories with advanced features including workflow automation and backup/restore capabilities.
-
-## Features
-
-- Basic Git operations (branches, commits, status)
-- Repository configuration management
-- Git hooks management
-- Workflow automation
-- Repository backup and restore
-- Template management
+- **Repository Management**: Manage branches, commit history, and repository status. Create and switch branches in a single operation.
+- **Git Operations**: Perform remote operations, handle merge conflicts, and manage repository configuration.
+- **Workflow Management**: Set up and execute workflows for various events, such as push and pull requests.
 
 ## Installation
-
-```bash
-pip install git-repository-manager
-```
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Rohit-Ray-Git/AI-Code-Repository-Assistant.git
+   ```
+2. Navigate to the project directory:
+   ```bash
+   cd AI-Code-Repository-Assistant
+   ```
+3. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Usage
+- **Repository Management**: Use the `RepositoryManager` class to manage branches, commit history, and repository status. Create and switch branches using the `create_and_switch_branch` method.
+- **Git Operations**: Utilize the `RepositoryManager` to perform remote operations, handle merge conflicts, and manage repository configuration.
+- **Workflow Management**: Set up and execute workflows using the `RepositoryManager` to automate tasks based on specific events.
 
-### Basic Repository Operations
-
-```python
-from git_ops import RepositoryManager
-
-# Initialize repository manager
-repo_manager = RepositoryManager("/path/to/repo")
-
-# Get repository status
-status = repo_manager.get_repository_status()
-print(f"Current branch: {status['current_branch']}")
-print(f"Changed files: {status['changed_files']}")
-```
-
-### Workflow Automation
-
-Set up and manage automated workflows:
-
-```python
-# Define a workflow
-workflow = {
-    "name": "test-workflow",
-    "description": "Run tests on push",
-    "events": ["push", "pull_request"],
-    "steps": [
-        {
-            "name": "run-tests",
-            "event": "push",
-            "command": "pytest tests/"
-        },
-        {
-            "name": "lint-check",
-            "event": "pull_request",
-            "command": "flake8 src/"
-        }
-    ]
-}
-
-# Set up the workflow
-repo_manager.setup_workflow("test-workflow", workflow)
-
-# Run workflow for a specific event
-workflow_id = repo_manager.run_workflow("test-workflow", "push")
-
-# Check workflow status
-status = repo_manager.get_workflow_status(workflow_id)
-print(f"Workflow status: {status['status']}")
-```
-
-### Repository Backup and Restore
-
-Backup and restore your repository:
-
-```python
-# Create a backup
-backup_dir = "/path/to/backups"
-repo_manager.create_backup(backup_dir)
-
-# List available backups
-backups = repo_manager.list_backups(backup_dir)
-for backup in backups:
-    print(f"Backup: {backup['name']} from {backup['timestamp']}")
-
-# Restore from a backup
-repo_manager.restore_backup(
-    "/path/to/backups/backup_20240101_120000",
-    "/path/to/restore"
-)
-
-# Set up automated backups
-schedule = {
-    "frequency": "daily",
-    "time": "00:00",
-    "retention_days": 7,
-    "backup_path": backup_dir
-}
-repo_manager.schedule_backup(backup_dir, schedule)
+## Testing
+Run the comprehensive test suite to verify all functionalities:
+```bash
+python test_all_features.py
 ```
 
 ## Contributing
-
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
-
 This project is licensed under the MIT License - see the LICENSE file for details. 

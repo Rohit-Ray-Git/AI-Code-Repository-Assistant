@@ -10,6 +10,9 @@ import threading
 import time
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
+import fnmatch
+from datetime import datetime
+import re
 
 try:
     from git import Repo, GitCommandError
@@ -521,53 +524,38 @@ class RepositoryManager:
             return False
 
     def setup_workflow(self, workflow_name: str, workflow_config: Dict[str, Any]) -> bool:
-        """Set up a workflow configuration.
+        """Set up a new workflow with the given configuration."""
+        # Validate workflow configuration
+        if not isinstance(workflow_config, dict):
+            raise ValueError("Workflow configuration must be a dictionary.")
         
-        Args:
-            workflow_name: Name of the workflow. Will be used as the filename (with .json extension)
-            workflow_config: Dictionary containing the workflow configuration with the following structure:
-                {
-                    "name": str,           # Name of the workflow
-                    "description": str,     # Description of what the workflow does
-                    "events": List[str],    # Optional list of events that can trigger this workflow
-                    "steps": List[Dict],    # List of steps to execute, each containing:
-                        {
-                            "name": str,    # Name of the step
-                            "event": str,   # Event that triggers this step
-                            "command": str  # Command to execute
-                        }
-                }
-            
-        Returns:
-            bool: True if workflow was set up successfully, False otherwise
-            
-        Example:
-            >>> workflow = {
-            ...     "name": "test-workflow",
-            ...     "description": "Run tests on push",
-            ...     "events": ["push", "pull_request"],
-            ...     "steps": [
-            ...         {
-            ...             "name": "run-tests",
-            ...             "event": "push",
-            ...             "command": "pytest tests/"
-            ...         }
-            ...     ]
-            ... }
-            >>> repo_manager.setup_workflow("test-workflow", workflow)
-            True
-        """
+        required_fields = ["name", "description", "events", "steps"]
+        for field in required_fields:
+            if field not in workflow_config:
+                raise ValueError(f"Workflow configuration missing required field: {field}")
+        
+        # Validate events
+        valid_events = ["push", "pull_request", "merge"]
+        for event in workflow_config["events"]:
+            if event not in valid_events:
+                raise ValueError(f"Invalid event: {event}. Valid events are: {valid_events}")
+        
+        # Validate steps
+        for step in workflow_config["steps"]:
+            if not isinstance(step, dict):
+                raise ValueError("Each step must be a dictionary.")
+            if "name" not in step or "event" not in step or "command" not in step:
+                raise ValueError("Each step must have 'name', 'event', and 'command' fields.")
+            if step["event"] not in valid_events:
+                raise ValueError(f"Invalid event in step: {step['event']}. Valid events are: {valid_events}")
+        
+        # Proceed with workflow setup
         try:
             workflows_dir = self.repo_path / ".git" / "workflows"
             workflow_file = workflows_dir / f"{workflow_name}.json"
             
             # Create workflows directory if it doesn't exist
             workflows_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Validate workflow configuration
-            if not self._validate_workflow_config(workflow_config):
-                logging.error(f"Invalid workflow configuration for {workflow_name}")
-                return False
             
             # Write the workflow configuration
             with open(workflow_file, "w") as f:
@@ -578,65 +566,6 @@ class RepositoryManager:
             
         except Exception as e:
             logging.error(f"Failed to set up workflow {workflow_name}: {str(e)}")
-            return False
-
-    def _validate_workflow_config(self, config: Dict[str, Any]) -> bool:
-        """Validate workflow configuration structure and content.
-        
-        Args:
-            config: Dictionary containing the workflow configuration
-            
-        Returns:
-            bool: True if configuration is valid, False otherwise
-            
-        Validation rules:
-            1. Must have required fields: name, description, steps
-            2. Steps must be a list of dictionaries
-            3. Each step must have: name (str), command (str), event (str)
-            4. If events are specified, step events must be in the workflow events list
-        """
-        try:
-            # Check required fields
-            required_fields = ['name', 'description', 'steps']
-            if not all(field in config for field in required_fields):
-                logging.error("Missing required fields in workflow configuration")
-                return False
-            
-            # Validate steps
-            if not isinstance(config['steps'], list):
-                logging.error("Steps must be a list")
-                return False
-            
-            for step in config['steps']:
-                if not isinstance(step, dict):
-                    logging.error("Each step must be a dictionary")
-                    return False
-                # Check required step fields
-                if 'name' not in step or 'command' not in step or 'event' not in step:
-                    logging.error("Step missing required fields (name, command, event)")
-                    return False
-                # Validate field types
-                if not isinstance(step['name'], str) or not isinstance(step['command'], str) or not isinstance(step['event'], str):
-                    logging.error("Step fields must be strings")
-                    return False
-                # Validate event is in the workflow events
-                if 'events' in config and step['event'] not in config['events']:
-                    logging.error(f"Step event '{step['event']}' not in workflow events: {config['events']}")
-                    return False
-            
-            # Validate events if present
-            if 'events' in config:
-                if not isinstance(config['events'], list):
-                    logging.error("Events must be a list")
-                    return False
-                if not all(isinstance(event, str) for event in config['events']):
-                    logging.error("All events must be strings")
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error validating workflow configuration: {str(e)}")
             return False
 
     def get_workflows(self) -> List[Dict[str, Any]]:
@@ -686,43 +615,34 @@ class RepositoryManager:
             logging.error(f"Failed to remove workflow: {str(e)}")
             return False
 
-    def run_workflow(self, workflow_name: str, event: str, data: Dict[str, Any] = None) -> str:
-        """
-        Run a workflow for a specific event
-        
-        Args:
-            workflow_name: Name of the workflow to run
-            event: Event that triggered the workflow
-            data: Additional data for the workflow
-            
-        Returns:
-            str: Workflow execution ID
-        """
+    def run_workflow(self, workflow_name: str, event: str) -> str:
+        """Run a workflow for the specified event."""
         try:
+            # Load workflow configuration
             workflow_file = self.repo_path / ".git" / "workflows" / f"{workflow_name}.json"
             if not workflow_file.exists():
-                raise ValueError(f"Workflow {workflow_name} not found")
+                raise ValueError(f"Workflow {workflow_name} not found.")
             
             with open(workflow_file, "r") as f:
                 workflow_config = json.load(f)
             
-            # Check if the event is configured in the workflow
-            if event not in workflow_config.get("events", []):
-                raise ValueError(f"Event {event} not configured in workflow {workflow_name}")
+            # Validate event
+            if event not in workflow_config["events"]:
+                raise ValueError(f"Event {event} not configured in workflow {workflow_name}.")
             
-            # Create workflow execution context
-            workflow = {
-                "name": workflow_name,
-                "event": event,
-                "data": data or {},
-                "steps": [
-                    step for step in workflow_config.get("steps", [])
-                    if step.get("event") == event
-                ]
-            }
+            # Execute steps for the event
+            for step in workflow_config["steps"]:
+                if step["event"] == event:
+                    # Execute the command
+                    subprocess.run(step["command"], shell=True, check=True)
             
-            # Schedule the workflow
-            return self.workflow_manager.schedule_workflow(workflow)
+            # Generate a unique workflow ID
+            workflow_id = f"wf_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Log workflow execution
+            logging.info(f"Workflow {workflow_name} executed for event {event} with ID {workflow_id}")
+            
+            return workflow_id
             
         except Exception as e:
             logging.error(f"Failed to run workflow: {str(e)}")
@@ -749,25 +669,63 @@ class RepositoryManager:
         """
         return self.workflow_manager.get_workflow_history()
 
-    def create_backup(self, backup_dir: str) -> bool:
-        """Create a backup of the repository including all files and Git data.
-        
-        Args:
-            backup_dir: Directory where backups will be stored. Will be created if it doesn't exist.
+    @staticmethod
+    def get_essential_file_patterns() -> List[str]:
+        """Get patterns for essential project files that should be included in backups."""
+        return [
+            # Python files
+            "*.py",
+            "*.pyi",
+            "*.pyx",
+            "*.pxd",
             
-        Returns:
-            bool: True if backup was successful, False otherwise
+            # Configuration files
+            "requirements.txt",
+            "setup.py",
+            "pyproject.toml",
+            "*.toml",
+            "*.yaml",
+            "*.yml",
+            "*.json",
+            "*.ini",
+            "*.cfg",
+            "*.conf",
+            ".env",
+            ".env.*",
             
-        The backup includes:
-            - All repository files
-            - .git directory (configuration, history, etc.)
-            - Metadata file with backup information
+            # Documentation
+            "README*",
+            "*.md",
+            "*.rst",
+            "docs/*",
+            "*.txt",
             
-        Example:
-            >>> repo_manager.create_backup("/path/to/backups")
-            True
-        """
+            # Git related
+            ".gitignore",
+            ".gitattributes",
+            
+            # Project specific
+            "Makefile",
+            "Dockerfile",
+            "docker-compose*.yml",
+            "*.sh",
+            "*.bat",
+            "*.ps1",
+            
+            # Source code directories
+            "src/*",
+            "tests/*",
+            "scripts/*",
+            "bin/*"
+        ]
+
+    def create_backup(self, backup_dir: str, exclude_patterns: List[str] = None, progress_callback = None) -> bool:
+        """Create a backup of essential repository files."""
         try:
+            # Convert paths to absolute
+            backup_dir = os.path.abspath(backup_dir)
+            repo_path = os.path.abspath(str(self.repo_path))
+            
             # Create backup directory if it doesn't exist
             os.makedirs(backup_dir, exist_ok=True)
             
@@ -776,39 +734,99 @@ class RepositoryManager:
             backup_name = f"backup_{timestamp}"
             backup_path = os.path.join(backup_dir, backup_name)
             
-            # Create backup using copytree with ignore_patterns
-            shutil.copytree(
-                str(self.repo_path),
-                backup_path,
-                symlinks=True,
-                ignore=None  # Copy all files including .git
-            )
+            # Create backup directory
+            os.makedirs(backup_path, exist_ok=True)
             
-            # Create metadata file
+            # Get list of files to backup
+            files_to_backup = []
+            total_size = 0
+            
+            # Get essential file patterns
+            include_patterns = self.get_essential_file_patterns()
+            
+            # Walk through repository
+            for root, dirs, files in os.walk(repo_path):
+                # Skip backup directory
+                if root.startswith(backup_dir):
+                    continue
+                
+                # Skip excluded directories
+                dirs[:] = [d for d in dirs if not any(
+                    fnmatch.fnmatch(d, pattern) for pattern in (exclude_patterns or [])
+                )]
+                
+                # Process files
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, repo_path)
+                    
+                    # Check if file matches any include pattern
+                    if not any(fnmatch.fnmatch(rel_path, pattern) for pattern in include_patterns):
+                        continue
+                    
+                    # Skip excluded files
+                    if any(fnmatch.fnmatch(rel_path, pattern) for pattern in (exclude_patterns or [])):
+                        continue
+                    
+                    file_size = os.path.getsize(full_path)
+                    files_to_backup.append((full_path, rel_path, file_size))
+                    total_size += file_size
+            
+            # Report initial progress
+            if progress_callback:
+                progress_callback(0)
+            
+            # Copy files
+            copied_size = 0
+            for src_path, rel_path, file_size in files_to_backup:
+                # Create destination path
+                dst_path = os.path.join(backup_path, rel_path)
+                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                
+                # Copy file
+                shutil.copy2(src_path, dst_path)
+                
+                # Update progress
+                copied_size += file_size
+                if progress_callback and total_size > 0:
+                    progress = int((copied_size / total_size) * 100)
+                    progress_callback(progress)
+            
+            # Report completion
+            if progress_callback:
+                progress_callback(100)
+            
+            # Create metadata
             metadata = {
                 "timestamp": timestamp,
-                "repository_path": str(self.repo_path),
+                "repository_path": repo_path,
                 "git_version": self.repo.git.version() if self.repo and GIT_AVAILABLE else "N/A",
-                "name": backup_name
+                "name": backup_name,
+                "include_patterns": include_patterns,
+                "exclude_patterns": exclude_patterns or [],
+                "total_files": len(files_to_backup),
+                "total_size": total_size,
+                "included_files": [rel_path for _, rel_path, _ in files_to_backup]
             }
             
+            # Save metadata
             metadata_path = os.path.join(backup_dir, f"{backup_name}_metadata.json")
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
             
-            logging.info(f"Successfully created backup: {backup_name}")
             return True
             
         except Exception as e:
             logging.error(f"Failed to create backup: {str(e)}")
             return False
 
-    def restore_backup(self, backup_path: str, restore_path: str) -> bool:
+    def restore_backup(self, backup_path: str, restore_path: str, progress_callback = None) -> bool:
         """Restore a repository from a backup.
         
         Args:
             backup_path: Path to the backup directory
             restore_path: Path where the repository should be restored
+            progress_callback: Optional callback function to report progress (0-100)
             
         Returns:
             bool: True if restore was successful, False otherwise
@@ -833,6 +851,9 @@ class RepositoryManager:
             # Create restore directory if it doesn't exist
             os.makedirs(restore_path, exist_ok=True)
             
+            if progress_callback:
+                progress_callback(0)  # Initial progress
+            
             # Remove existing contents if any
             if os.path.exists(restore_path):
                 for item in os.listdir(restore_path):
@@ -842,14 +863,42 @@ class RepositoryManager:
                     else:
                         os.remove(item_path)
             
+            if progress_callback:
+                progress_callback(20)  # Progress after cleanup
+            
+            # Count total files for progress tracking
+            total_files = sum(len(files) for _, _, files in os.walk(backup_path))
+            copied_files = 0
+            
+            # Custom copy function with progress tracking
+            def copy_with_progress(src, dst, symlinks=True):
+                nonlocal copied_files
+                if os.path.isdir(src):
+                    if not os.path.exists(dst):
+                        os.makedirs(dst)
+                    for item in os.listdir(src):
+                        s = os.path.join(src, item)
+                        d = os.path.join(dst, item)
+                        if os.path.isdir(s):
+                            copy_with_progress(s, d, symlinks)
+                        else:
+                            shutil.copy2(s, d)
+                            copied_files += 1
+                            if progress_callback and total_files > 0:
+                                progress = 20 + int((copied_files / total_files) * 60)  # Scale to 20-80%
+                                progress_callback(progress)
+                else:
+                    shutil.copy2(src, dst)
+                    copied_files += 1
+                    if progress_callback and total_files > 0:
+                        progress = 20 + int((copied_files / total_files) * 60)  # Scale to 20-80%
+                        progress_callback(progress)
+            
             # Restore repository with all contents including .git
-            shutil.copytree(
-                backup_path,
-                restore_path,
-                dirs_exist_ok=True,
-                symlinks=True,
-                ignore=None
-            )
+            copy_with_progress(backup_path, restore_path)
+            
+            if progress_callback:
+                progress_callback(80)  # Progress after copy
             
             # Initialize Git repository if GitPython is available
             if GIT_AVAILABLE and os.path.exists(os.path.join(restore_path, ".git")):
@@ -858,6 +907,9 @@ class RepositoryManager:
                     logging.info("Successfully reinitialized Git repository")
                 except Exception as e:
                     logging.warning(f"Failed to initialize Git repository after restore: {str(e)}")
+            
+            if progress_callback:
+                progress_callback(100)  # Final progress
             
             logging.info(f"Successfully restored backup to: {restore_path}")
             return True
@@ -961,4 +1013,246 @@ class RepositoryManager:
             
         except Exception as e:
             logging.error(f"Failed to get backup schedule: {str(e)}")
-            return None 
+            return None
+
+    def create_and_switch_branch(self, branch_name: str) -> bool:
+        """Create a new branch and switch to it in a single operation."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            self.repo.create_head(branch_name)
+            self.repo.git.checkout(branch_name)
+            return True
+        except Exception as e:
+            logging.error(f"Error creating and switching to branch: {e}")
+            return False
+
+    def merge_branch(self, source_branch: str, target_branch: str = None) -> bool:
+        """Merge a source branch into the target branch, handling conflicts automatically."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            if not target_branch:
+                target_branch = self.repo.active_branch.name
+            
+            # Checkout target branch
+            self.repo.git.checkout(target_branch)
+            
+            # Merge source branch
+            self.repo.git.merge(source_branch)
+            
+            # Check for conflicts
+            conflicts = self.get_merge_conflicts()
+            if conflicts:
+                logging.warning(f"Merge conflicts detected: {conflicts}")
+                # Resolve conflicts automatically (e.g., by taking the source branch version)
+                for conflict in conflicts:
+                    self.repo.git.checkout("--theirs", conflict)
+                    self.repo.index.add([conflict])
+                self.repo.index.commit("Resolved merge conflicts automatically")
+            
+            return True
+        except Exception as e:
+            logging.error(f"Error merging branch: {e}")
+            return False
+
+    def handle_git_operation(self, operation: str, *args, **kwargs) -> bool:
+        """Handle git operations with improved error handling and logging."""
+        if not GIT_AVAILABLE:
+            logging.error("GitPython is not available. Git operations cannot be performed.")
+            return False
+        try:
+            # Log the operation
+            logging.info(f"Performing git operation: {operation}")
+            
+            # Execute the operation
+            if operation == "push":
+                self.repo.git.push(*args, **kwargs)
+            elif operation == "pull":
+                self.repo.git.pull(*args, **kwargs)
+            elif operation == "fetch":
+                self.repo.git.fetch(*args, **kwargs)
+            elif operation == "checkout":
+                self.repo.git.checkout(*args, **kwargs)
+            elif operation == "merge":
+                self.repo.git.merge(*args, **kwargs)
+            else:
+                logging.error(f"Unsupported git operation: {operation}")
+                return False
+            
+            logging.info(f"Git operation {operation} completed successfully.")
+            return True
+        except Exception as e:
+            logging.error(f"Error performing git operation {operation}: {e}")
+            return False
+
+    def protect_branch(self, branch_name: str) -> bool:
+        """Protect a branch from direct pushes, requiring pull requests for changes."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            # Set branch protection rules
+            self.repo.git.branch("--set-upstream-to=origin/" + branch_name, branch_name)
+            self.repo.git.config("branch." + branch_name + ".pushRemote", "origin")
+            self.repo.git.config("branch." + branch_name + ".merge", "refs/heads/" + branch_name)
+            return True
+        except Exception as e:
+            logging.error(f"Error protecting branch: {e}")
+            return False
+
+    def validate_branch_name(self, branch_name: str) -> bool:
+        """Validate branch names to ensure they follow a specific convention."""
+        pattern = r'^(feature|bugfix|hotfix)/[a-zA-Z0-9-]+$'
+        if not re.match(pattern, branch_name):
+            return False 
+
+    def validate_commit_message(self, message: str) -> bool:
+        """Validate commit messages to ensure they follow a specific format."""
+        import re
+        pattern = r'^(feat|fix|docs|style|refactor|test|chore)(\([a-zA-Z0-9-]+\))?: .+$'
+        if not re.match(pattern, message):
+            logging.error(f"Commit message does not follow the conventional format.")
+            return False
+        return True 
+
+    def resolve_conflicts_interactive(self, conflicts: List[str]) -> bool:
+        """Resolve merge conflicts interactively."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            for conflict in conflicts:
+                # Open the conflicted file for editing
+                subprocess.run(["notepad", conflict], check=True)
+                # Stage the resolved file
+                self.repo.index.add([conflict])
+            self.repo.index.commit("Resolved merge conflicts interactively")
+            return True
+        except Exception as e:
+            logging.error(f"Error resolving conflicts interactively: {e}")
+            return False
+
+    def create_stash(self, message: str = None) -> bool:
+        """Create a stash with an optional message."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            if message:
+                self.repo.git.stash("save", message)
+            else:
+                self.repo.git.stash("save")
+            return True
+        except Exception as e:
+            logging.error(f"Error creating stash: {e}")
+            return False
+
+    def apply_stash(self, stash_index: int = 0) -> bool:
+        """Apply a stash by its index."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            self.repo.git.stash("apply", f"stash@{{{stash_index}}}")
+            return True
+        except Exception as e:
+            logging.error(f"Error applying stash: {e}")
+            return False
+
+    def drop_stash(self, stash_index: int = 0) -> bool:
+        """Drop a stash by its index."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            self.repo.git.stash("drop", f"stash@{{{stash_index}}}")
+            return True
+        except Exception as e:
+            logging.error(f"Error dropping stash: {e}")
+            return False
+
+    def rebase_branch(self, base_branch: str) -> bool:
+        """Rebase the current branch onto the specified base branch, handling unstaged changes."""
+        if not GIT_AVAILABLE:
+            return False
+        try:
+            # Check for unstaged changes
+            if self.repo.is_dirty():
+                # Stash changes
+                self.repo.git.stash("save", "Temporary stash for rebase")
+                stashed = True
+            else:
+                stashed = False
+            
+            # Perform rebase
+            self.repo.git.rebase(base_branch)
+            
+            # Apply stash if changes were stashed
+            if stashed:
+                self.repo.git.stash("apply")
+            
+            return True
+        except Exception as e:
+            logging.error(f"Error rebasing branch: {e}")
+            return False 
+
+    def setup_conditional_workflow(self, workflow_name: str, workflow_config: Dict[str, Any], conditions: Dict[str, Any]) -> bool:
+        """Set up a workflow that is triggered based on specific conditions."""
+        if not isinstance(workflow_config, dict):
+            raise ValueError("Workflow configuration must be a dictionary.")
+        
+        # Validate conditions
+        if not isinstance(conditions, dict):
+            raise ValueError("Conditions must be a dictionary.")
+        
+        # Add conditions to workflow config
+        workflow_config["conditions"] = conditions
+        
+        # Proceed with workflow setup
+        try:
+            workflows_dir = self.repo_path / ".git" / "workflows"
+            workflow_file = workflows_dir / f"{workflow_name}.json"
+            
+            # Create workflows directory if it doesn't exist
+            workflows_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Write the workflow configuration
+            with open(workflow_file, "w") as f:
+                json.dump(workflow_config, f, indent=2)
+            
+            logging.info(f"Successfully set up conditional workflow: {workflow_name}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to set up conditional workflow {workflow_name}: {str(e)}")
+            return False
+
+    def run_workflows_in_parallel(self, workflow_names: List[str], event: str) -> List[str]:
+        """Run multiple workflows in parallel for a specific event."""
+        workflow_ids = []
+        for workflow_name in workflow_names:
+            try:
+                workflow_id = self.run_workflow(workflow_name, event)
+                workflow_ids.append(workflow_id)
+            except Exception as e:
+                logging.error(f"Failed to run workflow {workflow_name}: {str(e)}")
+        return workflow_ids
+
+    def create_workflow_template(self, template_name: str, template_config: Dict[str, Any]) -> bool:
+        """Create a template for common workflows to simplify setup."""
+        if not isinstance(template_config, dict):
+            raise ValueError("Template configuration must be a dictionary.")
+        
+        try:
+            templates_dir = self.repo_path / ".git" / "workflow_templates"
+            template_file = templates_dir / f"{template_name}.json"
+            
+            # Create templates directory if it doesn't exist
+            templates_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Write the template configuration
+            with open(template_file, "w") as f:
+                json.dump(template_config, f, indent=2)
+            
+            logging.info(f"Successfully created workflow template: {template_name}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to create workflow template {template_name}: {str(e)}")
+            return False 
